@@ -126,6 +126,8 @@ class Consumer(QThread):
     def run(self):
         if setaffinity := getattr(os, "sched_setaffinity", None):
             setaffinity(0, self.cpus)
+        if setpriority := getattr(os, "setpriority", None):
+            setpriority(os.PRIO_PROCESS, 0, 19)
         while True:
             try:
                 job = self.queue.get()
