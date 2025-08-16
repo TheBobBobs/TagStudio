@@ -118,11 +118,14 @@ def clamp(value, lower_bound, upper_bound):
 class Consumer(QThread):
     MARKER_QUIT = "MARKER_QUIT"
 
-    def __init__(self, queue) -> None:
+    def __init__(self, cpus: list[int], queue) -> None:
+        self.cpus = cpus
         self.queue = queue
         QThread.__init__(self)
 
     def run(self):
+        if setaffinity := getattr(os, "sched_setaffinity", None):
+            setaffinity(0, self.cpus)
         while True:
             try:
                 job = self.queue.get()
@@ -268,12 +271,24 @@ class QtDriver(DriverMixin, QObject):
     def init_workers(self):
         """Init workers for rendering thumbnails."""
         if not self.thumb_threads:
-            max_threads = os.cpu_count() or 1
-            for i in range(max_threads):
-                thread = Consumer(self.thumb_job_queue)
+            # Cpu threads main process is allowed to use 0,1,2,3,4,5
+            if getaffinity := getattr(os, "sched_getaffinity", None):
+                allowed = list(getaffinity(0))
+            else:
+                # TODO: use os.process_cpu_count() python 3.13
+                allowed = list(range(os.cpu_count() or 1))
+
+            # Exclude first cpu pair (0,1)
+            start = min(len(allowed) - 1, 2)
+            allowed = allowed[start:]
+
+            # Spawn a worker for each remaining cpu pair (2,3) (4,5)
+            for i in range(0, len(allowed), 2):
+                cpus = allowed[i : i + 2]
+                thread = Consumer(cpus, self.thumb_job_queue)
                 thread.setObjectName(f"ThumbRenderer_{i}")
                 self.thumb_threads.append(thread)
-                thread.start()
+                thread.start(priority=QThread.Priority.LowestPriority)
 
     def open_library_from_dialog(self):
         dir = QFileDialog.getExistingDirectory(
